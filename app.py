@@ -10,7 +10,7 @@ app = FastAPI(title="ZIP → Providers API", version="1.0.2")
 PROVIDER_LIST_PATH = r"output/bdc_us_provider_list_D24_11nov2025 5.csv"
 ZIP_TO_PROVIDERS_UNIQUE = r"output/zip_to_providers_unique.csv"
 PROVIDERS_BY_COUNTY_PATH = r"output/providers_by_county.csv"
-ZIP_COUNTY_CROSSWALK_PATH = r"county_zip.csv"
+ZIP_COUNTY_CROSSWALK_PATH = r"output/county_zip.csv"
 # -------------------------------------------------------------------
 
 id_to_name: Dict[int, str] = {}
