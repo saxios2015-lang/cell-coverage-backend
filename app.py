@@ -6,6 +6,15 @@ from fastapi import FastAPI, HTTPException, Query
 
 app = FastAPI(title="ZIP → Providers API", version="1.0.2")
 
+# ADD THESE 4 LINES
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production you can change "*" to your Vercel URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # ------------ CONFIG: adjust paths if yours differ -----------------
 PROVIDER_LIST_PATH = r"output/bdc_us_provider_list_D24_11nov2025 5.csv"
 ZIP_TO_PROVIDERS_UNIQUE = r"output/zip_to_providers_unique.csv"
