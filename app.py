@@ -7,10 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="ZIP → Providers API", version="1.0.3")
 
-# CORS — allows your Vercel frontend to talk to Render
+# CORS — allows your frontend (local or Vercel) to talk to Render
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # change to your Vercel URL later if you want
+    allow_origins=["*"],           # you can restrict this to your frontend origin later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,34 +29,54 @@ zip_to_counties: Dict[str, List[str]] = {}
 
 
 def _normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names to safe, lowercase, underscore format."""
     def clean(c: str) -> str:
         if not isinstance(c, str):
             c = str(c)
+        # Remove non-printable characters
         c = "".join(ch for ch in c if 32 <= ord(ch) <= 126)
         return c.strip().strip().lower().replace(" ", "_")
+
     df.columns = [clean(c) for c in df.columns]
     return df
 
 
 # ---------------- Provider names ----------------
 def load_provider_names() -> None:
+    """Load provider_id → provider_name mapping from the main FCC provider list."""
     global id_to_name
     if not os.path.exists(PROVIDER_LIST_PATH):
         print(f"Warning: Provider list not found: {PROVIDER_LIST_PATH}")
         return
+
     try:
         df = pd.read_csv(PROVIDER_LIST_PATH, low_memory=False)
         df = _normalize_cols(df)
+
+        # Pick a reasonable name column
         name_col = "holding_company"
         if name_col not in df.columns:
-            for cand in ["provider_name", "brand_name", "doing_business_as", "holding_company_name"]:
+            for cand in [
+                "provider_name",
+                "brand_name",
+                "doing_business_as",
+                "holding_company_name",
+            ]:
                 if cand in df.columns:
                     name_col = cand
                     break
+
         df = df[["provider_id", name_col]].dropna().drop_duplicates()
-        df["provider_id"] = pd.to_numeric(df["provider_id"], errors="coerce").astype("Int64")
+        df["provider_id"] = pd.to_numeric(df["provider_id"], errors="coerce").astype(
+            "Int64"
+        )
         df = df.dropna(subset=["provider_id"])
-        id_to_name = {int(pid): str(n).strip() for pid, n in zip(df["provider_id"], df[name_col])}
+
+        id_to_name = {
+            int(pid): str(n).strip()
+            for pid, n in zip(df["provider_id"], df[name_col])
+        }
+
         print(f"Loaded {len(id_to_name):,} provider names (using '{name_col}').")
     except Exception as e:
         print("Warning: Failed to load provider list:", e)
@@ -64,33 +84,53 @@ def load_provider_names() -> None:
 
 # ---------------- County-merge fallback ----------------
 def _load_zip_to_providers_from_county_merge() -> Tuple[Dict[str, List[int]], Dict[str, List[str]]]:
-    if not os.path.exists(PROVIDERS_BY_COUNTY_PATH) or not os.path.exists(ZIP_COUNTY_CROSSWALK_PATH):
+    """
+    Build ZIP → [provider_id] and ZIP → [county_name] from:
+      - providers_by_county.csv
+      - county_zip.csv  (ZIP–county crosswalk)
+    """
+    if not os.path.exists(PROVIDERS_BY_COUNTY_PATH) or not os.path.exists(
+        ZIP_COUNTY_CROSSWALK_PATH
+    ):
         return {}, {}
 
     zip_providers: Dict[str, List[int]] = {}
     zip_counties: Dict[str, List[str]] = {}
 
     try:
+        # Providers by county
         prov = pd.read_csv(PROVIDERS_BY_COUNTY_PATH, low_memory=False, dtype=str)
         prov = _normalize_cols(prov)
 
-        # find county FIPS column
-        county_fips_col = next((c for c in ["county_fips", "geography_id", "fips", "county_code"] if c in prov.columns), None)
+        # Find county FIPS column
+        county_fips_col = next(
+            (c for c in ["county_fips", "geography_id", "fips", "county_code"] if c in prov.columns),
+            None,
+        )
         if not county_fips_col:
-            raise ValueError("No county FIPS column found")
+            raise ValueError("No county FIPS column found in providers_by_county.csv")
 
-        # find provider id column
-        provider_id_col = next((c for c in ["provider_id", "providerid", "pid", "provider"] if c in prov.columns), None)
+        # Find provider id column
+        provider_id_col = next(
+            (c for c in ["provider_id", "providerid", "pid", "provider"] if c in prov.columns),
+            None,
+        )
         if not provider_id_col:
-            raise ValueError("No provider_id column found")
+            raise ValueError("No provider_id column found in providers_by_county.csv")
 
-        # optional county name column
-        county_name_col = next((c for c in ["county_name", "geography_desc", "county", "name"] if c in prov.columns), None)
+        # Optional county name column
+        county_name_col = next(
+            (c for c in ["county_name", "geography_desc", "county", "name"] if c in prov.columns),
+            None,
+        )
 
         prov[county_fips_col] = prov[county_fips_col].astype(str).str.zfill(5)
-        prov[provider_id_col] = pd.to_numeric(prov[provider_id_col], errors="coerce").astype("Int64")
+        prov[provider_id_col] = pd.to_numeric(
+            prov[provider_id_col], errors="coerce"
+        ).astype("Int64")
         prov = prov.dropna(subset=[provider_id_col])
 
+        # ZIP–county crosswalk
         cross = pd.read_csv(ZIP_COUNTY_CROSSWALK_PATH, low_memory=False, dtype=str)
         cross = _normalize_cols(cross)
         if "county" not in cross.columns or "zip" not in cross.columns:
@@ -99,15 +139,19 @@ def _load_zip_to_providers_from_county_merge() -> Tuple[Dict[str, List[int]], Di
         cross["county"] = cross["county"].astype(str).str.zfill(5)
         cross["zip"] = cross["zip"].astype(str).str.zfill(5)
 
-        merged = cross.merge(prov, left_on="county", right_on=county_fips_col, how="inner")
+        # Merge on county FIPS
+        merged = cross.merge(
+            prov, left_on="county", right_on=county_fips_col, how="inner"
+        )
 
-        # Build the two dictionaries
+        # Build ZIP → [provider_id]
         zip_providers = (
             merged.groupby("zip")[provider_id_col]
             .apply(lambda s: sorted({int(x) for x in s.dropna()}))
             .to_dict()
         )
 
+        # Build ZIP → [county_name] (optional)
         if county_name_col:
             zip_counties = (
                 merged.groupby("zip")[county_name_col]
@@ -125,24 +169,41 @@ def _load_zip_to_providers_from_county_merge() -> Tuple[Dict[str, List[int]], Di
 
 # ---------------- Load everything on startup ----------------
 def load_zip_to_providers() -> None:
+    """
+    Load ZIP → provider_ids and ZIP → counties.
+    If a pre-built unique mapping exists, you could use it here; otherwise,
+    fall back to the county-merge logic.
+    """
     global zip_to_providers, zip_to_counties
-    # try pre-built unique file first (you don’t have it, so it will skip)
+
+    # Placeholder: if you ever generate a pre-aggregated file, load it here.
     if os.path.exists(ZIP_TO_PROVIDERS_UNIQUE):
-        # (your existing unique-file code – unchanged)
+        # For now, we skip this and just use the county merge.
+        # You can add custom logic here later if you create that file.
         pass
-    # fall back to county merge
+
+    # Fall back to county merge
     zip_to_providers, zip_to_counties = _load_zip_to_providers_from_county_merge()
     if not zip_to_providers:
         print("Warning: No ZIP→providers data available.")
 
 
+# Run the loaders at import/startup
 load_provider_names()
 load_zip_to_providers()
+
+
+# ---------------- Helper ----------------
+def providers_for_zip(zip_code: str) -> Tuple[List[int], List[str]]:
+    """Return ([provider_ids], [county_names]) for a given ZIP."""
+    z = str(zip_code).zfill(5)
+    return zip_to_providers.get(z, []), zip_to_counties.get(z, [])
 
 
 # ---------------- API ----------------
 @app.get("/health")
 def health():
+    """Simple health endpoint for monitoring."""
     return {
         "ok": True,
         "providers_loaded": len(id_to_name) > 0,
@@ -153,19 +214,34 @@ def health():
 
 @app.get("/api/providers/by-zip")
 def api_providers_by_zip(zip: str = Query(..., min_length=3, max_length=10)):
+    """
+    Main API: return FCC providers for a ZIP in a clean, UI-friendly format.
+    """
     prov_ids, counties = providers_for_zip(zip)
+
+    # Build a clean list of provider objects
+    providers_clean: List[Dict[str, Any]] = []
+    for pid in prov_ids:
+        name = id_to_name.get(pid, "Unknown")
+        providers_clean.append(
+            {
+                "provider_id": pid,
+                "provider_name": name,
+                # Preformatted label for direct rendering in the frontend
+                "label": f'Provider Name: "{name}", Provider ID: "{pid}"',
+            }
+        )
+
     return {
         "zip": str(zip).zfill(5),
+        "title": (
+            "We checked FCC data to find providers that are in your area. "
+            "Listed below are providers we found but that are not in TG3 coverage at this time. "
+            "Note: Some providers listed may be the roaming partner for the primary provider "
+            "in your area. For example, GCI is the main provider in Alaska but allows roaming on AT&T."
+        ),
         "counties": counties,
-        "providers": [
-            {"provider_id": pid, "provider_name": id_to_name.get(pid, "Unknown")}
-            for pid in prov_ids
-        ],
-        "providers_count": len(prov_ids),
+        "providers": providers_clean,
+        "providers_count": len(providers_clean),
         "source": "county_merge",
     }
-
-
-def providers_for_zip(zip_code: str) -> Tuple[List[int], List[str]]:
-    z = str(zip_code).zfill(5)
-    return zip_to_providers.get(z, []), zip_to_counties.get(z, [])
