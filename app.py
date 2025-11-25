@@ -235,10 +235,10 @@ def api_providers_by_zip(zip: str = Query(..., min_length=3, max_length=10)):
     return {
         "zip": str(zip).zfill(5),
         "title": (
-            "We checked FCC data to find providers that are in your area. "
-            "Listed below are providers we found but that are not in TG3 coverage at this time. "
+            "We also checked FCC data to find providers and towers that are in your area. "
+            "Listed below are a list of the providers that are likely in your area "
             "Note: Some providers listed may be the roaming partner for the primary provider "
-            "in your area. For example, GCI is the main provider in Alaska but allows roaming on AT&T."
+            "in your area. For example, GCI is the main provider in Bethel,Alaska but allows roaming on AT&T - this config would not work with TG3 as the SIM would be rejected when connecting to GCI"
         ),
         "counties": counties,
         "providers": providers_clean,
